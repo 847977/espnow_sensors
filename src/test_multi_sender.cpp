@@ -19,7 +19,7 @@ static const uint32_t INT_HC  = 50;
 static const uint32_t INT_DHT = 100;  
 static const uint32_t INT_MPL = 500;  
 
-// ------- MAC PRIJÍMAČA (UPRAV NA TVOJE RX) -------
+// ------- MAC PRIJÍMAČA -------
 uint8_t rxMac[] = { 0xA8, 0x03, 0x2A, 0x6B, 0x6E, 0x28 };
 
 // ------- SENZORY -------
@@ -57,7 +57,6 @@ void q_pop(){ if(!q_empty()) q_tail = (uint8_t)(q_tail+1); }
 
 // ------- ESP-NOW -------
 void onSent(const uint8_t*, esp_now_send_status_t){
-  // nepotrebujeme Serial; rýchlosť uprednostňujeme
   sending = false;   // uvoľni link pre ďalší balík
 }
 
