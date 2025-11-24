@@ -3,5 +3,5 @@
 
 #pragma once
 
-constexpr int SAMPLE_RATE = 44100;
-constexpr int BLOCK_SIZE  = 1024;
+constexpr int SAMPLE_RATE = 16000;  // vzorkovacia frekvencia v Hz
+constexpr int BLOCK_SIZE  = 256;    // počet vzoriek na jeden blok (per channel)
