@@ -5,6 +5,9 @@
 #include "inmp441.h"
 #include "frame_stats.h"
 #include "recorder.h"
+#include "window.h"
+#include "preprocess.h"
+
 
 static const int N = BLOCK_SIZE;
 
@@ -12,6 +15,11 @@ static const int N = BLOCK_SIZE;
 int32_t rawInterleaved[2 * N];  // R,L,R,L,... 32-bit words
 int32_t leftBuf[N];
 int32_t rightBuf[N];
+
+// FFT vstupy (float, okienkované)
+float fftInL[N];
+float fftInR[N];
+
 
 // ---- Recording control ----
 static bool g_recording = false;
@@ -35,6 +43,7 @@ void setup() {
     //Serial.println("=== Stereo INMP441 test (krok B) ===");
 
     audio::initI2S_STEREO();  // lib/audio/i2s_init.cpp
+    dsp::window::initHann(N); // lib/dsp/window.cpp - predpočítaj Hann okno pre BLOCK_SIZE
     pinMode(PIN_BTN_REC, INPUT_PULLUP);
     pinMode(PIN_LED_REC, OUTPUT);
     digitalWrite(PIN_LED_REC, LOW);
@@ -86,12 +95,40 @@ void loop() {
     FrameStats L = dsp::analyzeFrame(leftBuf, N);
     FrameStats R = dsp::analyzeFrame(rightBuf, N);
 
+    dsp::preprocess::prepareForFFT(leftBuf,  fftInL, N, L.mean);
+    dsp::preprocess::prepareForFFT(rightBuf, fftInR, N, R.mean);
+
+    /*
+    static uint32_t lastPrint = 0;
+    if (millis() - lastPrint > 300) {
+    lastPrint = millis();
+
+    Serial.printf("L mean=%.0f  first5:", L.mean);
+    for (int i = 0; i < 5; i++) Serial.printf(" %.6f", fftInL[i]);
+    Serial.println();
+
+    Serial.printf("R mean=%.0f  first5:", R.mean);
+    for (int i = 0; i < 5; i++) Serial.printf(" %.6f", fftInR[i]);
+    Serial.println();
+
+    auto rmsFloat = [&](float* x) {
+    double acc = 0;
+    for (int i = 0; i < N; i++) acc += (double)x[i] * (double)x[i];
+    return sqrt(acc / (double)N);
+    };
+
+    Serial.printf("RMSf L=%.5f  RMSf R=%.5f\n", rmsFloat(fftInL), rmsFloat(fftInR));
+    Serial.printf("Edges L: %.6f ... %.6f | R: %.6f ... %.6f\n",
+              fftInL[0], fftInL[N-1], fftInR[0], fftInR[N-1]);
+
+    }
+    */
+
+    
     if (g_recording) {
     recorder::writeStereoFrameToSerial(leftBuf, rightBuf, N);
     }
-
-
-
+    
 
     // 4) vypíš stereo štatistiky
     //Serial.printf("[L] mean=%7.0f  rms=%7.0f  peak=%9d  dBFS=%6.1f\n",
