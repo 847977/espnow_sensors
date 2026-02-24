@@ -7,6 +7,7 @@
 #include "recorder.h"
 #include "window.h"
 #include "preprocess.h"
+#include "fft_engine.h"
 
 
 static const int N = BLOCK_SIZE;
@@ -20,6 +21,9 @@ int32_t rightBuf[N];
 float fftInL[N];
 float fftInR[N];
 
+// FFT výstupy (buffre pre: magnitúda, bins 0..N/2)
+float magL[N/2];
+float magR[N/2];
 
 // ---- Recording control ----
 static bool g_recording = false;
@@ -44,6 +48,8 @@ void setup() {
 
     audio::initI2S_STEREO();  // lib/audio/i2s_init.cpp
     dsp::window::initHann(N); // lib/dsp/window.cpp - predpočítaj Hann okno pre BLOCK_SIZE
+    dsp::fft::init(N);        // lib/dsp/fft_engine.cpp - inicializuj FFT engine
+    
     pinMode(PIN_BTN_REC, INPUT_PULLUP);
     pinMode(PIN_LED_REC, OUTPUT);
     digitalWrite(PIN_LED_REC, LOW);
@@ -98,36 +104,28 @@ void loop() {
     dsp::preprocess::prepareForFFT(leftBuf,  fftInL, N, L.mean);
     dsp::preprocess::prepareForFFT(rightBuf, fftInR, N, R.mean);
 
-    /*
+    dsp::fft::computeMagnitude(fftInL, magL, N);
+    dsp::fft::computeMagnitude(fftInR, magR, N);
+
     static uint32_t lastPrint = 0;
     if (millis() - lastPrint > 300) {
     lastPrint = millis();
 
-    Serial.printf("L mean=%.0f  first5:", L.mean);
-    for (int i = 0; i < 5; i++) Serial.printf(" %.6f", fftInL[i]);
+    // napr. bins 1..10 (0 je DC)
+    Serial.print("L bins1-10:");
+    for (int i = 1; i <= 10; i++) Serial.printf(" %.3f", magL[i]);
     Serial.println();
 
-    Serial.printf("R mean=%.0f  first5:", R.mean);
-    for (int i = 0; i < 5; i++) Serial.printf(" %.6f", fftInR[i]);
+    Serial.print("R bins1-10:");
+    for (int i = 1; i <= 10; i++) Serial.printf(" %.3f", magR[i]);
     Serial.println();
-
-    auto rmsFloat = [&](float* x) {
-    double acc = 0;
-    for (int i = 0; i < N; i++) acc += (double)x[i] * (double)x[i];
-    return sqrt(acc / (double)N);
-    };
-
-    Serial.printf("RMSf L=%.5f  RMSf R=%.5f\n", rmsFloat(fftInL), rmsFloat(fftInR));
-    Serial.printf("Edges L: %.6f ... %.6f | R: %.6f ... %.6f\n",
-              fftInL[0], fftInL[N-1], fftInR[0], fftInR[N-1]);
-
     }
-    */
 
-    
+    /*
     if (g_recording) {
     recorder::writeStereoFrameToSerial(leftBuf, rightBuf, N);
     }
+    */ 
     
 
     // 4) vypíš stereo štatistiky
