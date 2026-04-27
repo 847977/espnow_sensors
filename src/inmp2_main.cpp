@@ -8,6 +8,10 @@
 #include "window.h"
 #include "preprocess.h"
 #include "fft_engine.h"
+#include "mapping.h"
+#include "espnow_tx.h"
+#include "packets.h"
+
 
 
 static const int N = BLOCK_SIZE;
@@ -34,11 +38,30 @@ static int g_lastStable  = HIGH;
 static unsigned long g_lastDebounceMs = 0;
 static const unsigned long DEBOUNCE_MS = 40;
 
+static bool g_micEnabled = true;
+
+static int g_micBtnLastReading = HIGH;
+static int g_micBtnStable = HIGH;
+static unsigned long g_micBtnDebounceMs = 0;
+static const unsigned long MIC_BTN_DEBOUNCE_MS = 40;
+
 // Markers (nesmú sa objaviť v PCM, preto sú ako ASCII a posielame ich samostatne)
 static const char MARK_START[] = "###START###\n";
 static const char MARK_STOP[]  = "###STOP###\n";
 
+static uint32_t seq = 0;
+static uint32_t lastSendMs = 0;
 
+float clamp01local(float x) {
+    if (x < 0.0f) return 0.0f;
+    if (x > 1.0f) return 1.0f;
+    return x;
+}
+
+float dbfsTo01(float dbfs) {
+    // -60 dBFS = ticho, -10 dBFS = silný signál
+    return clamp01local((dbfs + 60.0f) / 50.0f);
+}
 
 void setup() {
     Serial.begin(921600);
@@ -49,38 +72,28 @@ void setup() {
     audio::initI2S_STEREO();  // lib/audio/i2s_init.cpp
     dsp::window::initHann(N); // lib/dsp/window.cpp - predpočítaj Hann okno pre BLOCK_SIZE
     dsp::fft::init(N);        // lib/dsp/fft_engine.cpp - inicializuj FFT engine
+    transport::espnow_tx::init();
     
-    pinMode(PIN_BTN_REC, INPUT_PULLUP);
-    pinMode(PIN_LED_REC, OUTPUT);
-    digitalWrite(PIN_LED_REC, LOW);
+    pinMode(PIN_BTN_MIC_ENABLE, INPUT_PULLUP);
 
 
 }
 
 void loop() {
     // ---- Button handling (toggle) ----
-    int reading = digitalRead(PIN_BTN_REC);
+    int micReading = digitalRead(PIN_BTN_MIC_ENABLE);
 
-    if (reading != g_lastReading) {
-        g_lastDebounceMs = millis();
-        g_lastReading = reading;
+    if (micReading != g_micBtnLastReading) {
+        g_micBtnDebounceMs = millis();
+        g_micBtnLastReading = micReading;
     }
 
-    if ((millis() - g_lastDebounceMs) > DEBOUNCE_MS) {
-        if (reading != g_lastStable) {
-            g_lastStable = reading;
+    if ((millis() - g_micBtnDebounceMs) > MIC_BTN_DEBOUNCE_MS) {
+        if (micReading != g_micBtnStable) {
+            g_micBtnStable = micReading;
 
-            // toggle iba pri stlačení (LOW)
-            if (g_lastStable == LOW) {
-                g_recording = !g_recording;
-
-                digitalWrite(PIN_LED_REC, g_recording ? HIGH : LOW);
-
-                if (g_recording) {
-                    Serial.write((const uint8_t*)MARK_START, sizeof(MARK_START) - 1);
-                } else {
-                    Serial.write((const uint8_t*)MARK_STOP, sizeof(MARK_STOP) - 1);
-                }
+            if (g_micBtnStable == LOW) {
+                g_micEnabled = !g_micEnabled;
             }
         }
     }
@@ -107,11 +120,59 @@ void loop() {
     dsp::fft::computeMagnitude(fftInL, magL, N);
     dsp::fft::computeMagnitude(fftInR, magR, N);
 
+    auto bandsL = dsp::mapping::computeBands(magL, N, (float)SAMPLE_RATE);
+    auto bandsR = dsp::mapping::computeBands(magR, N, (float)SAMPLE_RATE);
+
+    if (millis() - lastSendMs >= 30) {
+        lastSendMs = millis();
+
+        transport::AudioPacket p = {};
+    
+        p.flags = g_micEnabled ? transport::FLAG_MIC_ENABLED : 0;
+        
+        p.magic = transport::AUDIO_PACKET_MAGIC;
+        p.version = transport::AUDIO_PACKET_VERSION;
+        p.seq = seq++;
+        p.timestampMs = millis();
+
+        constexpr float BASS_GAIN = 25.0f;
+        constexpr float MID_GAIN  = 8.0f;
+        constexpr float HIGH_GAIN = 30.0f;
+
+        p.lRms    = transport::pack01(dbfsTo01(L.dbfs));
+        p.lBass   = transport::pack01(clamp01local(bandsL.bass * BASS_GAIN));
+        p.lMid    = transport::pack01(clamp01local(bandsL.mid  * MID_GAIN));
+        p.lTreble = transport::pack01(clamp01local(bandsL.high * HIGH_GAIN));
+
+        p.rRms    = transport::pack01(dbfsTo01(R.dbfs));
+        p.rBass   = transport::pack01(clamp01local(bandsR.bass * BASS_GAIN));
+        p.rMid    = transport::pack01(clamp01local(bandsR.mid  * MID_GAIN));
+        p.rTreble = transport::pack01(clamp01local(bandsR.high * HIGH_GAIN));
+
+        if (!g_micEnabled) {
+            p.lRms = p.lBass = p.lMid = p.lTreble = 0;
+            p.rRms = p.rBass = p.rMid = p.rTreble = 0;
+        } else {
+            p.lRms    = transport::pack01(dbfsTo01(L.dbfs));
+            p.lBass   = transport::pack01(clamp01local(bandsL.bass * BASS_GAIN));
+            p.lMid    = transport::pack01(clamp01local(bandsL.mid  * MID_GAIN));
+            p.lTreble = transport::pack01(clamp01local(bandsL.high * HIGH_GAIN));
+
+            p.rRms    = transport::pack01(dbfsTo01(R.dbfs));
+            p.rBass   = transport::pack01(clamp01local(bandsR.bass * BASS_GAIN));
+            p.rMid    = transport::pack01(clamp01local(bandsR.mid  * MID_GAIN));
+            p.rTreble = transport::pack01(clamp01local(bandsR.high * HIGH_GAIN));
+        }
+        transport::espnow_tx::sendAudioPacket(p);
+    }
+
     static uint32_t lastPrint = 0;
     if (millis() - lastPrint > 300) {
-    lastPrint = millis();
+        lastPrint = millis();
 
     // napr. bins 1..10 (0 je DC)
+
+    /*
     Serial.print("L bins1-10:");
     for (int i = 1; i <= 10; i++) Serial.printf(" %.3f", magL[i]);
     Serial.println();
@@ -119,6 +180,12 @@ void loop() {
     Serial.print("R bins1-10:");
     for (int i = 1; i <= 10; i++) Serial.printf(" %.3f", magR[i]);
     Serial.println();
+    */
+    
+        Serial.printf("Bands L: B=%.4f M=%.4f H=%.4f | R: B=%.4f M=%.4f H=%.4f\n",
+                bandsL.bass, bandsL.mid, bandsL.high,
+                bandsR.bass, bandsR.mid, bandsR.high);
+
     }
 
     /*
